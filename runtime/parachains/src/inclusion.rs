@@ -149,6 +149,8 @@ decl_error! {
 		ValidationDataHashMismatch,
 		/// Internal error only returned when compiled with debug assertions.
 		InternalError,
+		/// The downward message queue is not processed correctly.
+		IncorrectDownwardMessageHandling,
 	}
 }
 
@@ -421,6 +423,15 @@ impl<T: Trait> Module<T> {
 					Error::<T>::NotCollatorSigned,
 				);
 
+				// check if the candidate passes the messaging acceptance criteria
+				ensure!(
+					<router::Module<T>>::check_processed_downward_messages(
+						para_id,
+						candidate.candidate.commitments.processed_downward_messages,
+					),
+					Error::<T>::IncorrectDownwardMessageHandling,
+				);
+
 				for (i, assignment) in scheduled[skip..].iter().enumerate() {
 					check_assignment_in_order(assignment)?;
 
@@ -556,6 +567,12 @@ impl<T: Trait> Module<T> {
 				relay_parent_number + config.validation_upgrade_delay,
 			);
 		}
+
+		// enact the messaging facet of the candidate.
+		weight += <router::Module<T>>::prune_dmq(
+			receipt.descriptor.para_id,
+			commitments.processed_downward_messages,
+		);
 
 		Self::deposit_event(
 			Event::<T>::CandidateIncluded(plain, commitments.head_data.clone())
