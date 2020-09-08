@@ -31,7 +31,7 @@ pub use runtime_primitives::traits::{BlakeTwo256, Hash as HashT};
 pub use polkadot_core_primitives::v1::{
 	BlockNumber, Moment, Signature, AccountPublic, AccountId, AccountIndex,
 	ChainId, Hash, Nonce, Balance, Header, Block, BlockId, UncheckedExtrinsic,
-	Remark, DownwardMessage,
+	Remark, DownwardMessage, InboundDownwardMessage,
 };
 
 // Export some polkadot-parachain primitives
@@ -265,6 +265,11 @@ pub struct PersistedValidationData<N = BlockNumber> {
 	/// vector is sorted ascending by the para id and doesn't contain multiple entries with the same
 	/// sender.
 	pub hrmp_mqc_heads: Vec<(Id, Hash)>,
+	/// The MQC head for the DMQ.
+	///
+	/// The DMQ MQC head will be used by the validation function to authorize the downward messages
+	/// passed by the collator.
+	pub dmq_mqc_head: Option<Hash>,
 }
 
 impl<N: Encode> PersistedValidationData<N> {
@@ -300,6 +305,8 @@ pub struct TransientValidationData<N = BlockNumber> {
 	/// which case the code upgrade should be applied at the end of the signaling
 	/// block.
 	pub code_upgrade_allowed: Option<N>,
+	/// The number of messages pending of the downward message queue.
+	pub dmq_length: u32,
 }
 
 /// Commitments made in a `CandidateReceipt`. Many of these are outputs of validation.
@@ -316,6 +323,8 @@ pub struct CandidateCommitments {
 	pub new_validation_code: Option<ValidationCode>,
 	/// The head-data produced as a result of execution.
 	pub head_data: HeadData,
+	/// The number of messages processed from the DMQ.
+	pub processed_downward_messages: u32,
 }
 
 impl CandidateCommitments {

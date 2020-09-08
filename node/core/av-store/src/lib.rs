@@ -379,6 +379,7 @@ mod tests {
 				parent_head: HeadData(vec![7, 8, 9]),
 				block_number: Default::default(),
 				hrmp_mqc_heads: Vec::new(),
+				dmq_mqc_head: None,
 			};
 			Self {
 				persisted_validation_data,

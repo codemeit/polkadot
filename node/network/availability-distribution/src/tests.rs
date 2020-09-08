@@ -213,6 +213,7 @@ impl Default for TestState {
 			parent_head: HeadData(vec![7, 8, 9]),
 			block_number: Default::default(),
 			hrmp_mqc_heads: Vec::new(),
+			dmq_mqc_head: None,
 		};
 
 		let validator_index = Some((validators.len() - 1) as ValidatorIndex);

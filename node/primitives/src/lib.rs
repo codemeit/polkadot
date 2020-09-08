@@ -126,6 +126,8 @@ pub struct ValidationOutputs {
 	pub fees: Balance,
 	/// The new validation code submitted by the execution, if any.
 	pub new_validation_code: Option<ValidationCode>,
+	/// The number of messages processed from the DMQ.
+	pub processed_downward_messages: u32,
 }
 
 /// Candidate invalidity details
@@ -278,6 +280,8 @@ pub struct Collation {
 	pub head_data: HeadData,
 	/// Proof that this block is valid.
 	pub proof_of_validity: PoV,
+	/// The number of messages processed from the DMQ.
+	pub processed_downward_messages: u32,
 }
 
 /// Configuration for the collation generator

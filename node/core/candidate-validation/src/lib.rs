@@ -493,6 +493,7 @@ fn validate_candidate_exhaustive<B: ValidationBackend, S: SpawnNamed + 'static>(
 					upward_messages: res.upward_messages,
 					fees: 0,
 					new_validation_code: res.new_validation_code,
+					processed_downward_messages: res.processed_downward_messages,
 				}),
 				Err(e) => ValidationResult::Invalid(e),
 			})

@@ -490,10 +490,12 @@ mod tests {
 				parent_head: HeadData(parent_head_data),
 				block_number: 123,
 				hrmp_mqc_heads: Vec::new(),
+				dmq_mqc_head: None,
 			},
 			upward_messages: Vec::new(),
 			fees: 0,
 			new_validation_code: None,
+			processed_downward_messages: 0,
 		}
 	}
 
