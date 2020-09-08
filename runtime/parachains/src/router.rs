@@ -171,4 +171,135 @@ impl<T: Trait> Module<T> {
 
 #[cfg(test)]
 mod tests {
+	use super::*;
+	use primitives::v1::BlockNumber;
+	use frame_support::traits::{OnFinalize, OnInitialize};
+
+	use crate::mock::{System, Router, new_test_ext, GenesisConfig as MockGenesisConfig};
+
+	fn run_to_block(to: BlockNumber, new_session: Option<Vec<BlockNumber>>) {
+		while System::block_number() < to {
+			let b = System::block_number();
+			Router::initializer_finalize();
+			System::on_finalize(b);
+
+			System::on_initialize(b + 1);
+			System::set_block_number(b + 1);
+
+			if new_session.as_ref().map_or(false, |v| v.contains(&(b + 1))) {
+				Router::initializer_on_new_session(&Default::default());
+			}
+			Router::initializer_initialize(b + 1);
+		}
+	}
+
+	fn default_genesis_config() -> MockGenesisConfig {
+		MockGenesisConfig {
+			configuration: crate::configuration::GenesisConfig {
+				config: crate::configuration::HostConfiguration {
+					..Default::default()
+				},
+			},
+			..Default::default()
+		}
+	}
+
+	#[test]
+	fn scheduled_cleanup_performed() {
+		let a = ParaId::from(1312);
+		let b = ParaId::from(228);
+		let c = ParaId::from(123);
+
+		new_test_ext(default_genesis_config()).execute_with(|| {
+			run_to_block(1, None);
+
+			// enqueue downward messages to A, B and C.
+			Router::queue_downward_message(a, vec![1, 2, 3]);
+			Router::queue_downward_message(b, vec![4, 5, 6]);
+			Router::queue_downward_message(c, vec![7, 8, 9]);
+
+			Router::schedule_para_cleanup(a);
+
+			// run to block without session change.
+			run_to_block(2, None);
+
+			assert!(!<Router as Store>::DownwardMessageQueues::get(&a).is_empty());
+			assert!(!<Router as Store>::DownwardMessageQueues::get(&b).is_empty());
+			assert!(!<Router as Store>::DownwardMessageQueues::get(&c).is_empty());
+
+			Router::schedule_para_cleanup(b);
+
+			// run to block changing the session.
+			run_to_block(3, Some(vec![3]));
+
+			assert!(<Router as Store>::DownwardMessageQueues::get(&a).is_empty());
+			assert!(<Router as Store>::DownwardMessageQueues::get(&b).is_empty());
+			assert!(!<Router as Store>::DownwardMessageQueues::get(&c).is_empty());
+
+			// verify that the outgoing paras are emptied.
+			assert!(OutgoingParas::get().is_empty())
+		});
+	}
+
+	#[test]
+	fn dmq_length_and_head_updated_properly() {
+		let a = ParaId::from(1312);
+		let b = ParaId::from(228);
+
+		new_test_ext(default_genesis_config()).execute_with(|| {
+			assert_eq!(Router::dmq_length(a), 0);
+			assert_eq!(Router::dmq_length(b), 0);
+
+			Router::queue_downward_message(a, vec![1, 2, 3]);
+
+			assert_eq!(Router::dmq_length(a), 1);
+			assert_eq!(Router::dmq_length(b), 0);
+			assert!(Router::dmq_mqc_head(a).is_some());
+			assert!(Router::dmq_mqc_head(b).is_none());
+		});
+	}
+
+	#[test]
+	fn check_processed_downward_messages() {
+		let a = ParaId::from(1312);
+
+		new_test_ext(default_genesis_config()).execute_with(|| {
+			// processed_downward_messages=0 is allowed when the DMQ is empty.
+			assert!(Router::check_processed_downward_messages(a, 0));
+
+			Router::queue_downward_message(a, vec![1, 2, 3]);
+			Router::queue_downward_message(a, vec![4, 5, 6]);
+			Router::queue_downward_message(a, vec![7, 8, 9]);
+
+			// 0 doesn't pass if the DMQ has msgs.
+			assert!(!Router::check_processed_downward_messages(a, 0));
+			// a candidate can consume up to 3 messages
+			assert!(Router::check_processed_downward_messages(a, 1));
+			assert!(Router::check_processed_downward_messages(a, 2));
+			assert!(Router::check_processed_downward_messages(a, 3));
+			// there is no 4 messages in the queue
+			assert!(!Router::check_processed_downward_messages(a, 4));
+		});
+	}
+
+	#[test]
+	fn dmq_pruning() {
+		let a = ParaId::from(1312);
+
+		new_test_ext(default_genesis_config()).execute_with(|| {
+			assert_eq!(Router::dmq_length(a), 0);
+
+			Router::queue_downward_message(a, vec![1, 2, 3]);
+			Router::queue_downward_message(a, vec![4, 5, 6]);
+			Router::queue_downward_message(a, vec![7, 8, 9]);
+			assert_eq!(Router::dmq_length(a), 3);
+
+			// pruning 0 elements shouldn't change anything.
+			Router::prune_dmq(a, 0);
+			assert_eq!(Router::dmq_length(a), 3);
+
+			Router::prune_dmq(a, 2);
+			assert_eq!(Router::dmq_length(a), 1);
+		});
+	}
 }
