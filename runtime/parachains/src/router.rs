@@ -22,8 +22,9 @@
 
 use crate::{configuration, initializer};
 use sp_std::prelude::*;
-use frame_support::{decl_error, decl_module, decl_storage, weights::Weight};
-use primitives::v1::{Id as ParaId};
+use frame_support::{decl_error, decl_module, decl_storage, weights::Weight, traits::Get};
+use sp_runtime::traits::{BlakeTwo256, Hash as HashT, SaturatedConversion};
+use primitives::v1::{Id as ParaId, DownwardMessage, InboundDownwardMessage, Hash};
 
 pub trait Trait: frame_system::Trait + configuration::Trait {}
 
@@ -32,6 +33,23 @@ decl_storage! {
 		/// Paras that are to be cleaned up at the end of the session.
 		/// The entries are sorted ascending by the para id.
 		OutgoingParas: Vec<ParaId>;
+
+		/*
+		 * Downward Message Passing (DMP)
+		 *
+		 * Storage layout required for implementation of DMP.
+		 */
+
+		/// The downward messages addressed for a certain para.
+		DownwardMessageQueues: map hasher(twox_64_concat) ParaId => Vec<InboundDownwardMessage<T::BlockNumber>>;
+		/// A mapping that stores the downward message queue MQC head for each para.
+		///
+		/// Each link in this chain has a form:
+		/// `(prev_head, B, H(M))`, where
+		/// - `prev_head`: is the previous head hash or zero if none.
+		/// - `B`: is the relay-chain block number in which a message was appended.
+		/// - `H(M)`: is the hash of the message being appended.
+		DownwardMessageQueueHeads: map hasher(twox_64_concat) ParaId => Option<Hash>;
 	}
 }
 
@@ -60,8 +78,9 @@ impl<T: Trait> Module<T> {
 		_notification: &initializer::SessionChangeNotification<T::BlockNumber>,
 	) {
 		let outgoing = OutgoingParas::take();
-		for _outgoing_para in outgoing {
-
+		for outgoing_para in outgoing {
+			<Self as Store>::DownwardMessageQueues::remove(&outgoing_para);
+			<Self as Store>::DownwardMessageQueueHeads::remove(&outgoing_para);
 		}
 	}
 
@@ -72,6 +91,81 @@ impl<T: Trait> Module<T> {
 				v.insert(i, id);
 			}
 		});
+	}
+
+	/// Enqueue a downward message to a specific recipient para.
+	pub fn queue_downward_message(para: ParaId, msg: DownwardMessage) {
+		let inbound = InboundDownwardMessage {
+			msg,
+			sent_at: <frame_system::Module<T>>::block_number(),
+		};
+
+		// obtain the new link in the MQC and update the head.
+		<Self as Store>::DownwardMessageQueueHeads::mutate(para, |head| {
+			let prev_head = head.unwrap_or(Default::default());
+			let new_head = BlakeTwo256::hash_of(&(
+				prev_head,
+				inbound.sent_at,
+				T::Hashing::hash_of(&inbound.msg),
+			));
+			*head = Some(new_head);
+		});
+
+		<Self as Store>::DownwardMessageQueues::mutate(para, |v| {
+			v.push(inbound);
+		});
+	}
+
+	/// Checks if the number of processed downward messages is valid, i.e.:
+	///
+	/// - if there are pending messages then `processed_downward_messages` should be at least 1,
+	/// - `processed_downward_messages` should not be greater than the number of pending messages.
+	///
+	/// Returns true if all checks have been passed.
+	pub(crate) fn check_processed_downward_messages(
+		para: ParaId,
+		processed_downward_messages: u32,
+	) -> bool {
+		let dmq_length = Self::dmq_length(para);
+
+		if dmq_length > 0 && processed_downward_messages == 0 {
+			return false;
+		}
+		if dmq_length < processed_downward_messages {
+			return false;
+		}
+
+		true
+	}
+
+	/// Prunes the specified number of messages from the downward message queue of the given para.
+	pub(crate) fn prune_dmq(para: ParaId, processed_downward_messages: u32) -> Weight {
+		<Self as Store>::DownwardMessageQueues::mutate(para, |q| {
+			let processed_downward_messages = processed_downward_messages as usize;
+			if processed_downward_messages > q.len() {
+				// reaching this branch is unexpected due to the constraint established by
+				// `check_processed_downward_messages`. But better be safe than sorry.
+				q.clear();
+			} else {
+				*q = q.split_off(processed_downward_messages);
+			}
+		});
+		T::DbWeight::get().reads_writes(1, 1)
+	}
+
+	/// Returns the Head of Message Queue Chain for the given para or `None` if there is none
+	/// associated with it.
+	pub(crate) fn dmq_mqc_head(para: ParaId) -> Option<Hash> {
+		<Self as Store>::DownwardMessageQueueHeads::get(&para)
+	}
+
+	/// Returns the number of pending downward messages addressed to the given para.
+	///
+	/// Returns 0 if the para doesn't have an associated downward message queue.
+	pub(crate) fn dmq_length(para: ParaId) -> u32 {
+		<Self as Store>::DownwardMessageQueues::decode_len(&para)
+			.unwrap_or(0)
+			.saturated_into::<u32>()
 	}
 }
 

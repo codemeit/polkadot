@@ -36,7 +36,7 @@ use bitvec::{order::Lsb0 as BitOrderLsb0, vec::BitVec};
 use sp_staking::SessionIndex;
 use sp_runtime::{DispatchError, traits::{One, Saturating}};
 
-use crate::{configuration, paras, scheduler::CoreAssignment};
+use crate::{configuration, paras, router, scheduler::CoreAssignment};
 
 /// A bitfield signed by a validator indicating that it is keeping its piece of the erasure-coding
 /// for any backed candidates referred to by a `1` bit available.
@@ -86,7 +86,7 @@ impl<H, N> CandidatePendingAvailability<H, N> {
 }
 
 pub trait Trait:
-	frame_system::Trait + paras::Trait + configuration::Trait
+	frame_system::Trait + paras::Trait + router::Trait + configuration::Trait
 {
 	type Event: From<Event<Self>> + Into<<Self as frame_system::Trait>::Event>;
 }
