@@ -505,7 +505,7 @@ fn validate_candidate_exhaustive<B: ValidationBackend, S: SpawnNamed + 'static>(
 mod tests {
 	use super::*;
 	use polkadot_node_subsystem_test_helpers as test_helpers;
-	use polkadot_primitives::v1::{HeadData, BlockData};
+	use polkadot_primitives::v1::{HeadData, BlockData, UpwardMessage};
 	use sp_core::testing::TaskExecutor;
 	use futures::executor;
 	use assert_matches::assert_matches;
@@ -841,7 +841,7 @@ mod tests {
 		assert_matches!(v, ValidationResult::Valid(outputs) => {
 			assert_eq!(outputs.head_data, HeadData(vec![1, 1, 1]));
 			assert_eq!(outputs.validation_data, validation_data.persisted);
-			assert_eq!(outputs.upward_messages, Vec::new());
+			assert_eq!(outputs.upward_messages, Vec::<UpwardMessage>::new());
 			assert_eq!(outputs.fees, 0);
 			assert_eq!(outputs.new_validation_code, Some(vec![2, 2, 2].into()));
 		});
@@ -977,7 +977,7 @@ mod tests {
 		assert_matches!(v, ValidationResult::Valid(outputs) => {
 			assert_eq!(outputs.head_data, HeadData(vec![1, 1, 1]));
 			assert_eq!(outputs.validation_data, validation_data.persisted);
-			assert_eq!(outputs.upward_messages, Vec::new());
+			assert_eq!(outputs.upward_messages, Vec::<UpwardMessage>::new());
 			assert_eq!(outputs.fees, 0);
 			assert_eq!(outputs.new_validation_code, Some(vec![2, 2, 2].into()));
 		});
