@@ -27,7 +27,7 @@ use crate::{
 use sp_std::prelude::*;
 use frame_support::{decl_error, decl_module, decl_storage, weights::Weight, traits::Get};
 use sp_runtime::traits::{BlakeTwo256, Hash as HashT, SaturatedConversion};
-use primitives::v1::{Id as ParaId, DownwardMessage, InboundDownwardMessage, Hash};
+use primitives::v1::{Id as ParaId, DownwardMessage, InboundDownwardMessage, Hash, UpwardMessage};
 use codec::Encode;
 
 pub trait Trait: frame_system::Trait + configuration::Trait {}
@@ -156,6 +156,37 @@ impl<T: Trait> Module<T> {
 		true
 	}
 
+	/// Check that all the upward messages sent by a candidate pass the acceptance criteria. Returns
+	/// false, if any of the messages doesn't pass.
+	pub(crate) fn check_upward_messages(
+		config: &HostConfiguration<T::BlockNumber>,
+		para: ParaId,
+		upward_messages: &[UpwardMessage],
+	) -> bool {
+		drop(para);
+
+		if upward_messages.len() as u32 > config.max_upward_message_num_per_candidate {
+			return false;
+		}
+
+		for _ in upward_messages {
+			return false;
+		}
+
+		true
+	}
+
+	/// Enacts all the upward messages sent by a candidate.
+	pub(crate) fn enact_upward_messages(para: ParaId, upward_messages: &[UpwardMessage]) -> Weight {
+		drop(para);
+
+		for _ in upward_messages {
+			todo!()
+		}
+
+		0
+	}
+
 	/// Prunes the specified number of messages from the downward message queue of the given para.
 	pub(crate) fn prune_dmq(para: ParaId, processed_downward_messages: u32) -> Weight {
 		<Self as Store>::DownwardMessageQueues::mutate(para, |q| {
@@ -184,6 +215,11 @@ impl<T: Trait> Module<T> {
 		<Self as Store>::DownwardMessageQueues::decode_len(&para)
 			.unwrap_or(0)
 			.saturated_into::<u32>()
+	}
+
+	/// Devote some time into dispatching pending upward messages.
+	pub(crate) fn process_pending_upward_messages() {
+		// no-op for now, will be filled in the following commits
 	}
 }
 

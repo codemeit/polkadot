@@ -151,6 +151,8 @@ decl_error! {
 		InternalError,
 		/// The downward message queue is not processed correctly.
 		IncorrectDownwardMessageHandling,
+		/// At least one upward message sent does not pass the acceptance criteria.
+		InvalidUpwardMessages,
 	}
 }
 
@@ -431,6 +433,14 @@ impl<T: Trait> Module<T> {
 					),
 					Error::<T>::IncorrectDownwardMessageHandling,
 				);
+				ensure!(
+					<router::Module<T>>::check_upward_messages(
+						&config,
+						para_id,
+						&candidate.candidate.commitments.upward_messages,
+					),
+					Error::<T>::InvalidUpwardMessages,
+				);
 
 				for (i, assignment) in scheduled[skip..].iter().enumerate() {
 					check_assignment_in_order(assignment)?;
@@ -572,6 +582,10 @@ impl<T: Trait> Module<T> {
 		weight += <router::Module<T>>::prune_dmq(
 			receipt.descriptor.para_id,
 			commitments.processed_downward_messages,
+		);
+		weight += <router::Module<T>>::enact_upward_messages(
+			receipt.descriptor.para_id,
+			&commitments.upward_messages,
 		);
 
 		Self::deposit_event(
