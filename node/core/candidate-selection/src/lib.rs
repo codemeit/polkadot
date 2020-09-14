@@ -493,9 +493,11 @@ mod tests {
 				dmq_mqc_head: None,
 			},
 			upward_messages: Vec::new(),
+			horizontal_messages: Vec::new(),
 			fees: 0,
 			new_validation_code: None,
 			processed_downward_messages: 0,
+			hrmp_watermark: 0,
 		}
 	}
 

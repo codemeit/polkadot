@@ -29,14 +29,14 @@ pub use runtime_primitives::traits::{BlakeTwo256, Hash as HashT};
 
 // Export some core primitives.
 pub use polkadot_core_primitives::v1::{
-	BlockNumber, Moment, Signature, AccountPublic, AccountId, AccountIndex,
-	ChainId, Hash, Nonce, Balance, Header, Block, BlockId, UncheckedExtrinsic,
-	Remark, DownwardMessage, InboundDownwardMessage,
+	BlockNumber, Moment, Signature, AccountPublic, AccountId, AccountIndex, ChainId, Hash, Nonce,
+	Balance, Header, Block, BlockId, UncheckedExtrinsic, Remark, DownwardMessage,
+	InboundDownwardMessage, InboundHrmpMessage, OutboundHrmpMessage,
 };
 
 // Export some polkadot-parachain primitives
 pub use polkadot_parachain::primitives::{
-	Id, LOWEST_USER_ID, UpwardMessage, HeadData, BlockData, ValidationCode,
+	Id, LOWEST_USER_ID, HrmpChannelId, UpwardMessage, HeadData, BlockData, ValidationCode,
 };
 
 // Export some basic parachain primitives from v0.
@@ -311,11 +311,13 @@ pub struct TransientValidationData<N = BlockNumber> {
 /// Commitments made in a `CandidateReceipt`. Many of these are outputs of validation.
 #[derive(PartialEq, Eq, Clone, Encode, Decode)]
 #[cfg_attr(feature = "std", derive(Debug, Default, Hash))]
-pub struct CandidateCommitments {
+pub struct CandidateCommitments<N = BlockNumber> {
 	/// Fees paid from the chain to the relay chain validators.
 	pub fees: Balance,
 	/// Messages destined to be interpreted by the Relay chain itself.
 	pub upward_messages: Vec<UpwardMessage>,
+	/// Horizontal messages sent by the parachain.
+	pub horizontal_messages: Vec<OutboundHrmpMessage<Id>>,
 	/// The root of a block's erasure encoding Merkle tree.
 	pub erasure_root: Hash,
 	/// New validation code.
@@ -324,6 +326,8 @@ pub struct CandidateCommitments {
 	pub head_data: HeadData,
 	/// The number of messages processed from the DMQ.
 	pub processed_downward_messages: u32,
+	/// The mark which specifies the block number up to which all inbound HRMP messages are processed.
+	pub hrmp_watermark: N,
 }
 
 impl CandidateCommitments {

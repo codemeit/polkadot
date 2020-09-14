@@ -491,9 +491,11 @@ fn validate_candidate_exhaustive<B: ValidationBackend, S: SpawnNamed + 'static>(
 					head_data: res.head_data,
 					validation_data: persisted_validation_data,
 					upward_messages: res.upward_messages,
+					horizontal_messages: res.horizontal_messages,
 					fees: 0,
 					new_validation_code: res.new_validation_code,
 					processed_downward_messages: res.processed_downward_messages,
+					hrmp_watermark: res.hrmp_watermark,
 				}),
 				Err(e) => ValidationResult::Invalid(e),
 			})
@@ -820,7 +822,9 @@ mod tests {
 			head_data: HeadData(vec![1, 1, 1]),
 			new_validation_code: Some(vec![2, 2, 2].into()),
 			upward_messages: Vec::new(),
+			horizontal_messages: Vec::new(),
 			processed_downward_messages: 0,
+			hrmp_watermark: 0,
 		};
 
 		assert!(check_wasm_result_against_constraints(
@@ -842,8 +846,10 @@ mod tests {
 			assert_eq!(outputs.head_data, HeadData(vec![1, 1, 1]));
 			assert_eq!(outputs.validation_data, validation_data.persisted);
 			assert_eq!(outputs.upward_messages, Vec::<UpwardMessage>::new());
+			assert_eq!(outputs.horizontal_messages, Vec::new());
 			assert_eq!(outputs.fees, 0);
 			assert_eq!(outputs.new_validation_code, Some(vec![2, 2, 2].into()));
+			assert_eq!(outputs.hrmp_watermark, 0);
 		});
 	}
 
@@ -867,7 +873,9 @@ mod tests {
 			head_data: HeadData(vec![1, 1, 1]),
 			new_validation_code: Some(vec![2, 2, 2].into()),
 			upward_messages: Vec::new(),
+			horizontal_messages: Vec::new(),
 			processed_downward_messages: 0,
+			hrmp_watermark: 0,
 		};
 
 		assert!(check_wasm_result_against_constraints(
@@ -913,7 +921,9 @@ mod tests {
 			head_data: HeadData(vec![1, 1, 1]),
 			new_validation_code: Some(vec![2, 2, 2].into()),
 			upward_messages: Vec::new(),
+			horizontal_messages: Vec::new(),
 			processed_downward_messages: 0,
+			hrmp_watermark: 0,
 		};
 
 		assert!(check_wasm_result_against_constraints(
@@ -956,7 +966,9 @@ mod tests {
 			head_data: HeadData(vec![1, 1, 1]),
 			new_validation_code: Some(vec![2, 2, 2].into()),
 			upward_messages: Vec::new(),
+			horizontal_messages: Vec::new(),
 			processed_downward_messages: 0,
+			hrmp_watermark: 0,
 		};
 
 		assert!(check_wasm_result_against_constraints(

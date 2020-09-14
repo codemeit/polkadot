@@ -26,7 +26,7 @@ use polkadot_primitives::v1::{
 	Hash, CommittedCandidateReceipt, CandidateReceipt, CompactStatement,
 	EncodeAs, Signed, SigningContext, ValidatorIndex, ValidatorId,
 	UpwardMessage, Balance, ValidationCode, PersistedValidationData, ValidationData,
-	HeadData, PoV, CollatorPair, Id as ParaId,
+	HeadData, PoV, CollatorPair, Id as ParaId, OutboundHrmpMessage,
 };
 use polkadot_statement_table::{
 	generic::{
@@ -115,19 +115,22 @@ pub struct FromTableMisbehavior {
 
 /// Outputs of validating a candidate.
 #[derive(Debug)]
-pub struct ValidationOutputs {
+pub struct ValidationOutputs<BlockNumber = polkadot_primitives::v1::BlockNumber> {
 	/// The head-data produced by validation.
 	pub head_data: HeadData,
 	/// The persisted validation data.
 	pub validation_data: PersistedValidationData,
 	/// Upward messages to the relay chain.
 	pub upward_messages: Vec<UpwardMessage>,
+	pub horizontal_messages: Vec<OutboundHrmpMessage<ParaId>>,
 	/// Fees paid to the validators of the relay-chain.
 	pub fees: Balance,
 	/// The new validation code submitted by the execution, if any.
 	pub new_validation_code: Option<ValidationCode>,
 	/// The number of messages processed from the DMQ.
 	pub processed_downward_messages: u32,
+	/// The mark which specifies the block number up to which all inbound HRMP messages are processed.
+	pub hrmp_watermark: BlockNumber,
 }
 
 /// Candidate invalidity details
@@ -269,11 +272,13 @@ impl std::convert::TryFrom<FromTableMisbehavior> for MisbehaviorReport {
 /// - does not contain the erasure root; that's computed at the Polkadot level, not at Cumulus
 /// - contains a proof of validity.
 #[derive(Clone, Encode, Decode)]
-pub struct Collation {
+pub struct Collation<BlockNumber = polkadot_primitives::v1::BlockNumber> {
 	/// Fees paid from the chain to the relay chain validators.
 	pub fees: Balance,
 	/// Messages destined to be interpreted by the Relay chain itself.
 	pub upward_messages: Vec<UpwardMessage>,
+	/// The horizontal messages sent by the parachain.
+	pub horizontal_messages: Vec<OutboundHrmpMessage<ParaId>>,
 	/// New validation code.
 	pub new_validation_code: Option<ValidationCode>,
 	/// The head-data produced as a result of execution.
@@ -282,6 +287,8 @@ pub struct Collation {
 	pub proof_of_validity: PoV,
 	/// The number of messages processed from the DMQ.
 	pub processed_downward_messages: u32,
+	/// The mark which specifies the block number up to which all inbound HRMP messages are processed.
+	pub hrmp_watermark: BlockNumber,
 }
 
 /// Configuration for the collation generator
