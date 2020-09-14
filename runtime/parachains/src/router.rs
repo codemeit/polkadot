@@ -28,8 +28,55 @@ use sp_std::prelude::*;
 use sp_std::collections::{btree_map::BTreeMap, vec_deque::VecDeque};
 use frame_support::{decl_error, decl_module, decl_storage, weights::Weight, traits::Get};
 use sp_runtime::traits::{BlakeTwo256, Hash as HashT, SaturatedConversion};
-use primitives::v1::{Id as ParaId, DownwardMessage, InboundDownwardMessage, Hash, UpwardMessage};
+use primitives::v1::{
+	Balance, DownwardMessage, Hash, HrmpChannelId, Id as ParaId, InboundDownwardMessage,
+	InboundHrmpMessage, UpwardMessage, SessionIndex,
+};
 use codec::{Encode, Decode};
+
+/// A description of a request to open an HRMP channel.
+#[derive(Encode, Decode)]
+struct HrmpOpenChannelRequest {
+	/// Indicates if this request was confirmed by the recipient.
+	confirmed: bool,
+	/// How many session boundaries ago this request was seen.
+	age: SessionIndex,
+	/// The amount that the sender supplied at the time of creation of this request.
+	sender_deposit: Balance,
+	/// The maximum number of messages that can be pending in the channel at once.
+	limit_used_places: u32,
+	/// The maximum total size of the messages that can be pending in the channel at once.
+	limit_used_bytes: u32,
+}
+
+/// A metadata of an HRMP channel.
+#[derive(Encode, Decode)]
+struct HrmpChannel {
+	/// The amount that the sender supplied as a deposit when opening this channel.
+	sender_deposit: Balance,
+	/// The amount that the recipient supplied as a deposit when accepting opening this channel.
+	recipient_deposit: Balance,
+	/// The maximum number of messages that can be pending in the channel at once.
+	limit_used_places: u32,
+	/// The maximum total size of the messages that can be pending in the channel at once.
+	limit_used_bytes: u32,
+	/// The maximum message size that could be put into the channel.
+	limit_message_size: u32,
+	/// The current number of messages pending in the channel.
+	/// Invariant: should be less or equal to `limit_used_places`.
+	used_places: u32,
+	/// The total size in bytes of all message payloads in the channel.
+	/// Invariant: should be less or equal to `limit_used_bytes`.
+	used_bytes: u32,
+	/// A head of the Message Queue Chain for this channel. Each link in this chain has a form:
+	/// `(prev_head, B, H(M))`, where
+	/// - `prev_head`: is the previous value of `mqc_head` or zero if none.
+	/// - `B`: is the [relay-chain] block number in which a message was appended
+	/// - `H(M)`: is the hash of the message being appended.
+	/// This value is initialized to a special value that consists of all zeroes which indicates
+	/// that no messages were previously added.
+	mqc_head: Option<Hash>,
+}
 
 pub trait Trait: frame_system::Trait + configuration::Trait {}
 
@@ -73,6 +120,59 @@ decl_storage! {
 		/// This is the para that gets will get dispatched first during the next upward dispatchable queue
 		/// execution round.
 		NextDispatchRoundStartWith: Option<ParaId>;
+
+		/*
+		 * Horizontally Relay-routed Message Passing (HRMP)
+		 *
+		 * HRMP related storage layout
+		 */
+
+		/// The set of pending HRMP open channel requests.
+		///
+		/// The set is accompanied by a list for iteration.
+		///
+		/// Invariant:
+		/// - There are no channels that exists in list but not in the set and vice versa.
+		HrmpOpenChannelRequests: map hasher(twox_64_concat) HrmpChannelId => Option<HrmpOpenChannelRequest>;
+		HrmpOpenChannelRequestsList: Vec<HrmpChannelId>;
+
+		/// This mapping tracks how many open channel requests are inititated by a given sender para.
+		/// Invariant: `HrmpOpenChannelRequests` should contain the same number of items that has `(X, _)`
+		/// as the number of `HrmpOpenChannelRequestCount` for `X`.
+		HrmpOpenChannelRequestCount: map hasher(twox_64_concat) ParaId => u32;
+		/// This mapping tracks how many open channel requests were accepted by a given recipient para.
+		/// Invariant: `HrmpOpenChannelRequests` should contain the same number of items `(_, X)` with
+		/// `confirmed` set to true, as the number of `HrmpAcceptedChannelRequestCount` for `X`.
+		HrmpAcceptedChannelRequestCount: map hasher(twox_64_concat) ParaId => u32;
+
+		/// A set of pending HRMP close channel requests that are going to be closed during the session change.
+		/// Used for checking if a given channel is registered for closure.
+		///
+		/// The set is accompanied by a list for iteration.
+		///
+		/// Invariant:
+		/// - There are no channels that exists in list but not in the set and vice versa.
+		HrmpCloseChannelRequests: map hasher(twox_64_concat) HrmpChannelId => Option<()>;
+		HrmpCloseChannelRequestsList: Vec<HrmpChannelId>;
+
+		/// The HRMP watermark associated with each para.
+		HrmpWatermarks: map hasher(twox_64_concat) ParaId => Option<T::BlockNumber>;
+		/// HRMP channel data associated with each para.
+		HrmpChannels: map hasher(twox_64_concat) HrmpChannelId => Option<HrmpChannel>;
+		/// The indexes that map all senders to their recievers and vise versa.
+		/// Invariants:
+		/// - for each ingress index entry for `P` each item `I` in the index should present in `HrmpChannels` as `(I, P)`.
+		/// - for each egress index entry for `P` each item `E` in the index should present in `HrmpChannels` as `(P, E)`.
+		/// - there should be no other dangling channels in `HrmpChannels`.
+		HrmpIngressChannelsIndex: map hasher(twox_64_concat) ParaId => Vec<ParaId>;
+		HrmpEgressChannelsIndex: map hasher(twox_64_concat) ParaId => Vec<ParaId>;
+		/// Storage for the messages for each channel.
+		/// Invariant: cannot be non-empty if the corresponding channel in `HrmpChannels` is `None`.
+		HrmpChannelContents: map hasher(twox_64_concat) HrmpChannelId => Vec<InboundHrmpMessage<T::BlockNumber>>;
+		/// Maintains a mapping that can be used to answer the question:
+		/// What paras sent a message at the given block number for a given reciever.
+		/// Invariant: The para ids vector is never empty.
+		HrmpChannelDigests: map hasher(twox_64_concat) ParaId => Vec<(T::BlockNumber, Vec<ParaId>)>;
 	}
 }
 
