@@ -195,13 +195,23 @@ impl<T: Trait> Module<T> {
 		para: ParaId,
 		upward_messages: &[UpwardMessage],
 	) -> bool {
-		drop(para);
-
 		if upward_messages.len() as u32 > config.max_upward_message_num_per_candidate {
 			return false;
 		}
 
-		for _ in upward_messages {
+		let (mut para_queue_count, mut para_queue_size) =
+			<Self as Store>::RelayDispatchQueueSize::get(&para);
+
+		for msg in upward_messages {
+			para_queue_count += 1;
+			para_queue_size += msg.len() as u32;
+		}
+
+		// make sure that the queue is not overfilled.
+		// we do it here only once since returning false invalidates the whole relay-chain block.
+		if para_queue_count > config.max_upward_queue_count
+			|| para_queue_size > config.max_upward_queue_size
+		{
 			return false;
 		}
 
@@ -210,13 +220,35 @@ impl<T: Trait> Module<T> {
 
 	/// Enacts all the upward messages sent by a candidate.
 	pub(crate) fn enact_upward_messages(para: ParaId, upward_messages: &[UpwardMessage]) -> Weight {
-		drop(para);
+		let mut weight = 0;
 
-		for _ in upward_messages {
-			todo!()
+		if !upward_messages.is_empty() {
+			let (extra_cnt, extra_size) = upward_messages
+				.iter()
+				.fold((0, 0), |(cnt, size), d| (cnt + 1, size + d.len() as u32));
+
+			<Self as Store>::RelayDispatchQueues::mutate(&para, |v| {
+				v.extend(upward_messages.iter().cloned())
+			});
+
+			<Self as Store>::RelayDispatchQueueSize::mutate(
+				&para,
+				|(ref mut cnt, ref mut size)| {
+					*cnt += extra_cnt;
+					*size += extra_size;
+				},
+			);
+
+			<Self as Store>::NeedsDispatch::mutate(|v| {
+				if let Err(i) = v.binary_search(&para) {
+					v.insert(i, para);
+				}
+			});
+
+			weight += T::DbWeight::get().reads_writes(3, 3);
 		}
 
-		0
+		weight
 	}
 
 	/// Prunes the specified number of messages from the downward message queue of the given para.
