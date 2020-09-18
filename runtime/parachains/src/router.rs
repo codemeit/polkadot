@@ -22,15 +22,22 @@
 
 use crate::{
 	configuration::{self, HostConfiguration},
-	initializer,
+	initializer, ensure_parachain,
 };
 use sp_std::prelude::*;
-use sp_std::collections::{btree_map::BTreeMap, vec_deque::VecDeque};
-use frame_support::{decl_error, decl_module, decl_storage, weights::Weight, traits::Get};
+use sp_std::mem;
+use sp_std::collections::{
+	{btree_map::BTreeMap, btree_set::BTreeSet},
+	vec_deque::VecDeque,
+};
+use frame_support::{
+	decl_error, decl_module, decl_storage, ensure, dispatch::DispatchResult, weights::Weight,
+	traits::Get,
+};
 use sp_runtime::traits::{BlakeTwo256, Hash as HashT, SaturatedConversion};
 use primitives::v1::{
 	Balance, DownwardMessage, Hash, HrmpChannelId, Id as ParaId, InboundDownwardMessage,
-	InboundHrmpMessage, UpwardMessage, SessionIndex,
+	InboundHrmpMessage, UpwardMessage, SessionIndex, OutboundHrmpMessage,
 };
 use codec::{Encode, Decode};
 
@@ -78,7 +85,11 @@ struct HrmpChannel {
 	mqc_head: Option<Hash>,
 }
 
-pub trait Trait: frame_system::Trait + configuration::Trait {}
+pub trait Trait: frame_system::Trait + configuration::Trait {
+	type Origin: From<crate::Origin>
+		+ From<<Self as frame_system::Trait>::Origin>
+		+ Into<Result<crate::Origin, <Self as Trait>::Origin>>;
+}
 
 decl_storage! {
 	trait Store for Module<T: Trait> as Router {
@@ -177,13 +188,74 @@ decl_storage! {
 }
 
 decl_error! {
-	pub enum Error for Module<T: Trait> { }
+	pub enum Error for Module<T: Trait> {
+		OpenHrmpChannelToRecipient,
+		OpenHrmpChannelTooManyPlaces,
+		OpenHrmpChannelTooBigMessage,
+		OpenHrmpChannelAlreadyExists,
+		OpenHrmpChannelAlreadyRequested,
+	 }
 }
 
 decl_module! {
 	/// The router module.
 	pub struct Module<T: Trait> for enum Call where origin: <T as frame_system::Trait>::Origin {
 		type Error = Error<T>;
+
+		#[weight = 0]
+		fn hrmp_init_open_channel(
+			origin,
+			recipient: ParaId,
+			max_places: u32,
+			max_message_size: u32
+		) -> DispatchResult {
+			let origin = ensure_parachain(<T as Trait>::Origin::from(origin))?;
+			ensure!(
+				origin != recipient,
+				Error::<T>::OpenHrmpChannelToRecipient,
+			);
+
+			let config = <configuration::Module<T>>::config();
+			ensure!(
+				max_places <= config.hrmp_channel_max_places,
+				Error::<T>::OpenHrmpChannelTooManyPlaces,
+			);
+			ensure!(
+				max_message_size <= config.hrmp_channel_max_message_size,
+				Error::<T>::OpenHrmpChannelTooBigMessage,
+			);
+
+			let channel_id = HrmpChannelId {
+				sender: origin,
+				recipient,
+			};
+			ensure!(
+				<Self as Store>::HrmpOpenChannelRequests::get(&channel_id).is_none(),
+				Error::<T>::OpenHrmpChannelAlreadyExists,
+			);
+			ensure!(
+				<Self as Store>::HrmpChannels::get(&channel_id).is_none(),
+				Error::<T>::OpenHrmpChannelAlreadyRequested,
+			);
+
+			Ok(())
+		}
+
+		#[weight = 0]
+		fn hrmp_accept_open_channel(
+			origin,
+			sender: ParaId,
+		) -> DispatchResult {
+			Ok(())
+		}
+
+		#[weight = 0]
+		fn hrmp_close_channel(
+			origin,
+			channel_id: HrmpChannelId,
+		) -> DispatchResult {
+			Ok(())
+		}
 	}
 }
 
@@ -318,6 +390,76 @@ impl<T: Trait> Module<T> {
 		true
 	}
 
+	/// Check that the candidate of the given recipient controls the HRMP watermark properly.
+	pub(crate) fn check_hrmp_watermark(
+		recipient: ParaId,
+		relay_chain_parent_number: T::BlockNumber,
+		new_hrmp_watermark: T::BlockNumber,
+	) -> bool {
+		// First, check where the watermark CANNOT legally land.
+		//
+		// (a) For ensuring that messages are eventually, a rule requires each parablock new
+		//     watermark should be greater than the last one.
+		//
+		// (b) However, a parachain cannot read into "the future", therefore the watermark should
+		//     not be greater than the relay-chain context block which the parablock refers to.
+		if let Some(last_watermark) = <Self as Store>::HrmpWatermarks::get(&recipient) {
+			if new_hrmp_watermark <= last_watermark {
+				return false;
+			}
+		}
+		if new_hrmp_watermark > relay_chain_parent_number {
+			return false;
+		}
+
+		// Second, check where the watermark CAN land. It's one of the following:
+		//
+		// (a) The relay parent block number.
+		// (b) A relay-chain block in which this para received at least one message.
+		if new_hrmp_watermark == relay_chain_parent_number {
+			true
+		} else {
+			let digest = <Self as Store>::HrmpChannelDigests::get(&recipient);
+			digest
+				.binary_search_by_key(&new_hrmp_watermark, |(block_no, _)| *block_no)
+				.is_ok()
+		}
+	}
+
+	pub(crate) fn check_outbound_hrmp(
+		sender: ParaId,
+		out_hrmp_msgs: &[OutboundHrmpMessage<ParaId>],
+	) -> bool {
+		// TODO: check that the messages are sorted in ascending order and that there are two messages
+		// are sent to the same recipient.
+
+		for out_msg in out_hrmp_msgs {
+			let channel_id = HrmpChannelId {
+				sender,
+				recipient: out_msg.recipient,
+			};
+
+			let channel = match <Self as Store>::HrmpChannels::get(&channel_id) {
+				Some(channel) => channel,
+				None => return false,
+			};
+
+			if out_msg.data.len() as u32 > channel.limit_message_size {
+				return false;
+			}
+
+			if channel.used_bytes + out_msg.data.len() as u32 > channel.limit_used_bytes {
+				return false;
+			}
+
+			if channel.used_places + 1 > channel.limit_used_places {
+				return false;
+			}
+		}
+
+		true
+	}
+
 	/// Enacts all the upward messages sent by a candidate.
 	pub(crate) fn enact_upward_messages(para: ParaId, upward_messages: &[UpwardMessage]) -> Weight {
 		let mut weight = 0;
@@ -364,6 +506,118 @@ impl<T: Trait> Module<T> {
 			}
 		});
 		T::DbWeight::get().reads_writes(1, 1)
+	}
+
+	pub(crate) fn prune_hrmp(recipient: ParaId, new_hrmp_watermark: T::BlockNumber) -> Weight {
+		let mut weight = 0;
+
+		// sift through the incoming messages digest to collect the paras that sent at least one
+		// message to this parachain between the old and new watermarks.
+		let senders = <Self as Store>::HrmpChannelDigests::mutate(&recipient, |digest| {
+			let mut senders = BTreeSet::new();
+			let mut residue = Vec::with_capacity(digest.len());
+			for (block_no, paras_sent_msg) in mem::replace(digest, Vec::new()) {
+				if block_no <= new_hrmp_watermark {
+					senders.extend(paras_sent_msg);
+				} else {
+					residue.push((block_no, paras_sent_msg));
+				}
+			}
+			*digest = residue;
+			senders
+		});
+		weight += T::DbWeight::get().reads_writes(1, 1);
+
+		// having all senders we can trivially find out the channels which we need to prune.
+		let channels_to_prune = senders
+			.into_iter()
+			.map(|sender| HrmpChannelId { sender, recipient });
+		for channel_id in channels_to_prune {
+			// prune each channel up to the new watermark keeping track how many messages we removed
+			// and what is the total byte size of them.
+			let (cnt, size) =
+				<Self as Store>::HrmpChannelContents::mutate(&channel_id, |outbound_messages| {
+					let (mut cnt, mut size) = (0, 0);
+
+					let mut residue = Vec::with_capacity(outbound_messages.len());
+					for msg in mem::replace(outbound_messages, Vec::new()).into_iter() {
+						if msg.sent_at <= new_hrmp_watermark {
+							cnt += 1;
+							size += msg.data.len();
+						} else {
+							residue.push(msg);
+						}
+					}
+					*outbound_messages = residue;
+
+					(cnt, size)
+				});
+
+			// update the channel metadata.
+			<Self as Store>::HrmpChannels::mutate(&channel_id, |channel| {
+				if let Some(ref mut channel) = channel {
+					channel.used_places -= cnt as u32;
+					channel.used_bytes -= size as u32;
+				}
+			});
+
+			weight += T::DbWeight::get().reads_writes(2, 2);
+		}
+
+		<Self as Store>::HrmpWatermarks::insert(&recipient, new_hrmp_watermark);
+		weight += T::DbWeight::get().reads_writes(0, 1);
+
+		weight
+	}
+
+	pub(crate) fn queue_outbound_hrmp(
+		sender: ParaId,
+		out_hrmp_msgs: &[OutboundHrmpMessage<ParaId>],
+	) -> Weight {
+		let mut weight = 0;
+		let now = <frame_system::Module<T>>::block_number();
+
+		for out_msg in out_hrmp_msgs {
+			let channel_id = HrmpChannelId {
+				sender,
+				recipient: out_msg.recipient,
+			};
+
+			let mut channel = match <Self as Store>::HrmpChannels::get(&channel_id) {
+				Some(channel) => channel,
+				None => {
+					// apparently, that since acceptance of this candidate the recipient was
+					// offboarded and the channel no longer exists.
+					continue;
+				}
+			};
+
+			let inbound = InboundHrmpMessage {
+				sent_at: now,
+				data: out_msg.data.clone(), // TODO: would be nice to remove this
+				                            // can we move the messages in this function?
+			};
+
+			// book keeping
+			channel.used_places += 1;
+			channel.used_bytes += out_msg.data.len() as u32;
+
+			// compute the new MQC head of the channel
+			let prev_head = channel.mqc_head.clone().unwrap_or(Default::default());
+			let new_head = BlakeTwo256::hash_of(&(
+				prev_head,
+				inbound.sent_at,
+				T::Hashing::hash_of(&inbound.data),
+			));
+			channel.mqc_head = Some(new_head);
+
+			<Self as Store>::HrmpChannels::insert(&channel_id, channel);
+			<Self as Store>::HrmpChannelContents::append(&channel_id, inbound);
+
+			weight += T::DbWeight::get().reads_writes(2, 2);
+		}
+
+		weight
 	}
 
 	/// Returns the Head of Message Queue Chain for the given para or `None` if there is none

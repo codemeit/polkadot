@@ -153,6 +153,10 @@ decl_error! {
 		IncorrectDownwardMessageHandling,
 		/// At least one upward message sent does not pass the acceptance criteria.
 		InvalidUpwardMessages,
+		/// The candidate didn't follow the rules of HRMP watermark advancement.
+		HrmpWatermarkMishandling,
+		/// The HRMP messages sent by the candidate is not valid.
+		InvalidOutboundHrmp,
 	}
 }
 
@@ -441,6 +445,22 @@ impl<T: Trait> Module<T> {
 					),
 					Error::<T>::InvalidUpwardMessages,
 				);
+				ensure!(
+					<router::Module<T>>::check_hrmp_watermark(
+						para_id,
+						relay_parent_number,
+						// TODO: Hmm, we should settle on a single represenation of T::BlockNumber
+						T::BlockNumber::from(candidate.candidate.commitments.hrmp_watermark),
+					),
+					Error::<T>::HrmpWatermarkMishandling,
+				);
+				ensure!(
+					<router::Module<T>>::check_outbound_hrmp(
+						para_id,
+						&candidate.candidate.commitments.horizontal_messages,
+					),
+					Error::<T>::InvalidOutboundHrmp,
+				);
 
 				for (i, assignment) in scheduled[skip..].iter().enumerate() {
 					check_assignment_in_order(assignment)?;
@@ -586,6 +606,14 @@ impl<T: Trait> Module<T> {
 		weight += <router::Module<T>>::enact_upward_messages(
 			receipt.descriptor.para_id,
 			&commitments.upward_messages,
+		);
+		weight += <router::Module<T>>::prune_hrmp(
+			receipt.descriptor.para_id,
+			T::BlockNumber::from(commitments.hrmp_watermark),
+		);
+		weight += <router::Module<T>>::queue_outbound_hrmp(
+			receipt.descriptor.para_id,
+			&commitments.horizontal_messages,
 		);
 
 		Self::deposit_event(
